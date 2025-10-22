@@ -9,12 +9,26 @@ from dotenv import load_dotenv
 # See litellm docs for a full list: https://docs.litellm.ai/docs/providers
 AVAILABLE_MODELS = {
     # Friendly Name: litellm Model String
-    "gpt-4o": "openai/gpt-4o",
-    "gpt-3.5": "openai/gpt-3.5-turbo",
-    "groq-llama3-8b": "groq/llama3-8b-8192",
+    "gemini-pro": "gemini/gemini-2.5-pro",
+    "gemini-flash": "gemini/gemini-2.5-flash",
+    "gemini-flash-lite": "gemini/gemini-2.5-flash-lite",
+
+    "gemma2": "groq/gemma2-9b-it",
+    "gpt120b": "groq/openai/gpt-oss-120b",
+    "gpt20b": "groq/openai/gpt-oss-20b",
+    "compound_mini": "groq/groq/compound-mini",
+    "llama33versatile": "groq/llama-3.3-70b-versatile",
+    "llama31instant": "groq/llama-3.1-8b-instant",
+    "llama3-8b": "groq/llama3-8b-8192",
     "groq-mixtral": "groq/mixtral-8x7b-32768",
-    "ollama-llama3": "ollama/llama3", # Assumes you have 'llama3' pulled in Ollama
-    "ollama-mistral": "ollama/mistral", # Assumes you have 'mistral' pulled in Ollama
+
+    "magmedium1": "mistral/magistral-medium-2506",
+    "medium31": "mistral/mistral-medium-2508",
+    "magsmall": "mistral/magistral-small-2506",
+    "opennemo": "mistral/open-mistral-nemo"
+
+    # "ollama-llama3": "ollama/llama3", # Assumes you have 'llama3' pulled in Ollama
+    # "ollama-mistral": "ollama/mistral", # Assumes you have 'mistral' pulled in Ollama
 }
 
 class Chatbot:
@@ -26,14 +40,8 @@ class Chatbot:
         self.active_model_name = None
         
         # Set a sensible default model based on available API keys
-        if os.getenv("OPENAI_API_KEY"):
-            self.switch_model("gpt-4o")
-        elif os.getenv("GROQ_API_KEY"):
-            self.switch_model("groq-llama3-8b")
-        else:
-            # Fallback to Ollama if no keys are present
-            self.switch_model("ollama-llama3")
-
+        self.switch_model("gpt120b")
+        
     def switch_model(self, friendly_name: str):
         if friendly_name not in AVAILABLE_MODELS:
             return f"Error: Model '{friendly_name}' is not recognized."

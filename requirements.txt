@@ -1,2 +1,4 @@
 litellm
 python-dotenv
+rich
+prompt-toolkit

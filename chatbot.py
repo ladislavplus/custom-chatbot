@@ -4,12 +4,12 @@ import litellm
 from dotenv import load_dotenv
 from datetime import datetime
 from pathlib import Path
+from difflib import SequenceMatcher
 
 class Chatbot:
     def __init__(self):        
         load_dotenv(override=True)
-        print("SSL_CERT_FILE =", os.getenv("SSL_CERT_FILE"))
-
+        
         self.conversation_history = []
         self.system_prompt = {"role": "system", "content": "You are a helpful assistant."}
         self.active_model_name = None
@@ -30,7 +30,6 @@ class Chatbot:
         
         if not config_file.exists():
             print("Warning: models_config.json not found. Using default models.")
-            # Fallback to basic config
             return {
                 "models": {
                     "gpt120b": {
@@ -48,60 +47,100 @@ class Chatbot:
             print(f"Error loading models_config.json: {e}")
             return {"models": {}}
     
-    def switch_model(self, friendly_name: str):
-        """Switch to a different AI model"""
-        if friendly_name not in self.models_config["models"]:
-            return f"Error: Model '{friendly_name}' is not recognized. Use /models to see available models."
+    def _fuzzy_match_model(self, query: str):
+        """Find best matching model using fuzzy matching"""
+        query = query.lower()
+        matches = []
         
-        model_info = self.models_config["models"][friendly_name]
-        self.active_model_name = model_info["litellm_string"]
-        self.active_model_friendly = friendly_name
+        for name in self.models_config["models"].keys():
+            # Calculate similarity ratio
+            ratio = SequenceMatcher(None, query.lower(), name.lower()).ratio()
+            # Also check if query is a substring
+            if query in name.lower():
+                ratio += 0.3  # Boost substring matches
+            matches.append((name, ratio))
         
-        return f"✓ Switched to: {friendly_name} ({model_info['provider']})"
+        # Sort by similarity
+        matches.sort(key=lambda x: x[1], reverse=True)
+        
+        # Get top matches (similarity > 0.4)
+        good_matches = [m for m in matches if m[1] > 0.4]
+        
+        return good_matches[:5] if good_matches else []
+    
+    def switch_model(self, identifier: str):
+        """Switch to a different AI model by name, number, or fuzzy match"""
+        # Try direct match first
+        if identifier in self.models_config["models"]:
+            model_info = self.models_config["models"][identifier]
+            self.active_model_name = model_info["litellm_string"]
+            self.active_model_friendly = identifier
+            return ("success", f"Switched to: {identifier} ({model_info['provider']})")
+        
+        # Try numbered selection
+        if identifier.isdigit():
+            model_list = list(self.models_config["models"].keys())
+            idx = int(identifier) - 1
+            if 0 <= idx < len(model_list):
+                model_name = model_list[idx]
+                return self.switch_model(model_name)
+            else:
+                return ("error", f"Invalid model number. Use 1-{len(model_list)}")
+        
+        # Try fuzzy matching
+        matches = self._fuzzy_match_model(identifier)
+        
+        if not matches:
+            return ("error", f"No models found matching '{identifier}'")
+        
+        if len(matches) == 1:
+            # Single match, switch to it
+            return self.switch_model(matches[0][0])
+        
+        # Multiple matches, return them for user to choose
+        return ("multiple", matches)
 
-    def list_models(self):
-        """List all available models grouped by provider"""
+    def get_models_list(self):
+        """Get structured list of models grouped by provider"""
         models_by_provider = {}
+        model_index = 1
+        indexed_models = []
         
         for name, info in self.models_config["models"].items():
             provider = info.get("provider", "Unknown")
             if provider not in models_by_provider:
                 models_by_provider[provider] = []
             
-            models_by_provider[provider].append({
+            model_entry = {
+                "index": model_index,
                 "name": name,
                 "description": info.get("description", ""),
-                "use_case": info.get("use_case", "")
-            })
+                "use_case": info.get("use_case", ""),
+                "current": name == self.active_model_friendly
+            }
+            
+            models_by_provider[provider].append(model_entry)
+            indexed_models.append((model_index, name))
+            model_index += 1
         
-        output = "\n=== Available Models ===\n"
-        for provider, models in sorted(models_by_provider.items()):
-            output += f"\n[{provider}]\n"
-            for model in models:
-                output += f"  • {model['name']:<20} - {model['description']}"
-                if model.get('use_case'):
-                    output += f"\n    └─ Use case: {model['use_case']}"
-                output += "\n"
-        
-        output += f"\nCurrent model: {self.active_model_friendly}\n"
-        return output
+        return models_by_provider, indexed_models
 
     def set_system_prompt(self, prompt: str):
         """Set a new system prompt"""
         self.system_prompt = {"role": "system", "content": prompt}
         self.start_new_chat()
-        return f"✓ System prompt updated. Conversation reset."
+        return "System prompt updated. Conversation reset."
 
     def start_new_chat(self):
         """Start a new conversation"""
         self.conversation_history = []
         self.total_tokens_used = 0
-        return "✓ New chat session started."
+        return "New chat session started."
 
     def get_chat_response_stream(self, user_prompt: str):
         """Get streaming response from the AI model"""
         if not self.active_model_name:
-            yield "Error: No model is currently active."
+            yield ("error", "No model is currently active.")
             return
             
         messages = [self.system_prompt] + self.conversation_history + [{"role": "user", "content": user_prompt}]
@@ -120,7 +159,7 @@ class Chatbot:
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     response_text += content
-                    yield content
+                    yield ("content", content)
             
             # Update token usage if available
             if hasattr(chunk, 'usage') and chunk.usage:
@@ -132,7 +171,7 @@ class Chatbot:
             
         except Exception as e:
             error_msg = self._format_error(e)
-            yield f"\n\n❌ Error: {error_msg}"
+            yield ("error", error_msg)
     
     def _format_error(self, error):
         """Format error messages to be more user-friendly"""
@@ -152,14 +191,12 @@ class Chatbot:
     def save_conversation(self, filename: str = None):
         """Save conversation to a markdown file"""
         if not self.conversation_history:
-            return "⚠ No conversation to save."
+            return ("warning", "No conversation to save.")
         
-        # Generate filename if not provided
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"chat_{self.active_model_friendly}_{timestamp}.md"
         
-        # Ensure .md extension
         if not filename.endswith('.md'):
             filename += '.md'
         
@@ -167,7 +204,6 @@ class Chatbot:
         
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
-                # Write header
                 f.write(f"# Chat Conversation\n\n")
                 f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"**Model:** {self.active_model_friendly} ({self.active_model_name})\n")
@@ -176,16 +212,15 @@ class Chatbot:
                     f.write(f"**Total Tokens:** {self.total_tokens_used}\n")
                 f.write(f"\n---\n\n")
                 
-                # Write conversation
                 for msg in self.conversation_history:
                     role = msg['role'].capitalize()
                     content = msg['content']
                     f.write(f"## {role}\n\n{content}\n\n")
             
-            return f"✓ Conversation saved to: {filepath}"
+            return ("success", f"Conversation saved to: {filepath}")
         
         except Exception as e:
-            return f"❌ Error saving conversation: {e}"
+            return ("error", f"Error saving conversation: {e}")
     
     def load_conversation(self, filename: str):
         """Load conversation from a markdown file"""
@@ -195,13 +230,12 @@ class Chatbot:
         filepath = self.conversations_dir / filename
         
         if not filepath.exists():
-            return f"❌ File not found: {filepath}"
+            return ("error", f"File not found: {filepath}")
         
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # Parse the conversation
             self.conversation_history = []
             lines = content.split('\n')
             
@@ -229,17 +263,16 @@ class Chatbot:
                     if line.strip():
                         current_content.append(line)
             
-            # Add last message
             if current_role and current_content:
                 self.conversation_history.append({
                     "role": current_role,
                     "content": '\n'.join(current_content).strip()
                 })
             
-            return f"✓ Loaded conversation from: {filepath} ({len(self.conversation_history)} messages)"
+            return ("success", f"Loaded conversation from: {filepath} ({len(self.conversation_history)} messages)")
         
         except Exception as e:
-            return f"❌ Error loading conversation: {e}"
+            return ("error", f"Error loading conversation: {e}")
     
     def list_saved_conversations(self):
         """List all saved conversations"""
@@ -247,19 +280,21 @@ class Chatbot:
             files = sorted(self.conversations_dir.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True)
             
             if not files:
-                return "No saved conversations found."
+                return []
             
-            output = "\n=== Saved Conversations ===\n\n"
+            conversations = []
             for file in files:
                 stat = file.stat()
-                modified = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
-                size = stat.st_size
-                output += f"  • {file.name:<50} ({size:>6} bytes, {modified})\n"
+                conversations.append({
+                    "name": file.name,
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime)
+                })
             
-            return output
+            return conversations
         
         except Exception as e:
-            return f"❌ Error listing conversations: {e}"
+            return None
     
     def get_stats(self):
         """Get conversation statistics"""
@@ -267,12 +302,29 @@ class Chatbot:
         user_msgs = sum(1 for msg in self.conversation_history if msg['role'] == 'user')
         assistant_msgs = sum(1 for msg in self.conversation_history if msg['role'] == 'assistant')
         
-        output = "\n=== Conversation Stats ===\n"
-        output += f"Model: {self.active_model_friendly}\n"
-        output += f"Total messages: {msg_count}\n"
-        output += f"User messages: {user_msgs}\n"
-        output += f"Assistant messages: {assistant_msgs}\n"
-        if self.total_tokens_used > 0:
-            output += f"Total tokens used: {self.total_tokens_used}\n"
-        
-        return output
+        return {
+            "model": self.active_model_friendly,
+            "total_messages": msg_count,
+            "user_messages": user_msgs,
+            "assistant_messages": assistant_msgs,
+            "total_tokens": self.total_tokens_used
+        }
+    
+    def get_command_completions(self):
+        """Get list of available commands for auto-completion"""
+        return [
+            "/help", "/quit", "/exit", "/models", "/switch", 
+            "/new", "/system", "/save", "/load", "/list", "/stats"
+        ]
+    
+    def get_model_names(self):
+        """Get list of model names for auto-completion"""
+        return list(self.models_config["models"].keys())
+    
+    def get_saved_filenames(self):
+        """Get list of saved conversation filenames for auto-completion"""
+        try:
+            files = list(self.conversations_dir.glob("*.md"))
+            return [f.stem for f in files]  # Return without .md extension
+        except:
+            return []

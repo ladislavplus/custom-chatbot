@@ -7,10 +7,11 @@ from pathlib import Path
 from difflib import SequenceMatcher
 
 class Chatbot:
-    def __init__(self):        
+    def __init__(self):
         load_dotenv(override=True)
         
         self.conversation_history = []
+        self.full_conversation_history = []
         self.system_prompt = {"role": "system", "content": "You are a helpful assistant."}
         self.active_model_name = None
         self.active_model_friendly = None
@@ -75,6 +76,11 @@ class Chatbot:
             model_info = self.models_config["models"][identifier]
             self.active_model_name = model_info["litellm_string"]
             self.active_model_friendly = identifier
+            self.full_conversation_history.append({
+                "type": "event",
+                "event": "model_switch",
+                "model_friendly_name": self.active_model_friendly
+            })
             return ("success", f"Switched to: {identifier} ({model_info['provider']})")
         
         # Try numbered selection
@@ -128,12 +134,18 @@ class Chatbot:
     def set_system_prompt(self, prompt: str):
         """Set a new system prompt"""
         self.system_prompt = {"role": "system", "content": prompt}
+        self.full_conversation_history.append({
+            "type": "event",
+            "event": "system_prompt_change",
+            "new_prompt": prompt
+        })
         self.start_new_chat()
         return "System prompt updated. Conversation reset."
 
     def start_new_chat(self):
         """Start a new conversation"""
         self.conversation_history = []
+        self.full_conversation_history = []
         self.total_tokens_used = 0
         return "New chat session started."
 
@@ -166,8 +178,12 @@ class Chatbot:
                 self.total_tokens_used += chunk.usage.total_tokens
             
             # Add to conversation history
-            self.conversation_history.append({"role": "user", "content": user_prompt})
-            self.conversation_history.append({"role": "assistant", "content": response_text})
+            user_message = {"role": "user", "content": user_prompt}
+            assistant_message = {"role": "assistant", "content": response_text}
+            self.conversation_history.append(user_message)
+            self.conversation_history.append(assistant_message)
+            self.full_conversation_history.append(user_message)
+            self.full_conversation_history.append(assistant_message)
             
         except Exception as e:
             error_msg = self._format_error(e)
@@ -190,7 +206,7 @@ class Chatbot:
     
     def save_conversation(self, filename: str = None):
         """Save conversation to a markdown file"""
-        if not self.conversation_history:
+        if not self.full_conversation_history:
             return ("warning", "No conversation to save.")
         
         if not filename:
@@ -212,10 +228,13 @@ class Chatbot:
                     f.write(f"**Total Tokens:** {self.total_tokens_used}\n")
                 f.write(f"\n---\n\n")
                 
-                for msg in self.conversation_history:
-                    role = msg['role'].capitalize()
-                    content = msg['content']
-                    f.write(f"## {role}\n\n{content}\n\n")
+                for msg in self.full_conversation_history:
+                    if msg.get('type') == 'event' and msg.get('event') == 'model_switch':
+                        f.write(f"**System: Switched to model: {msg['model_friendly_name']}**\n\n")
+                    elif 'role' in msg:
+                        role = msg['role'].capitalize()
+                        content = msg['content']
+                        f.write(f"## {role}\n\n{content}\n\n")
             
             return ("success", f"Conversation saved to: {filepath}")
         
@@ -234,41 +253,75 @@ class Chatbot:
         
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            self.conversation_history = []
-            lines = content.split('\n')
-            
+                lines = f.readlines()
+
+            # Reset state
+            self.start_new_chat()
+
+            # Parse header
+            header_lines = []
+            body_lines = []
+            in_header = True
+            for line in lines:
+                if in_header and line.strip() == '---':
+                    in_header = False
+                    continue
+                if in_header:
+                    header_lines.append(line)
+                else:
+                    body_lines.append(line)
+
+            # Process header
+            loaded_model_friendly_name = None
+            for line in header_lines:
+                if line.startswith('**System Prompt:**'):
+                    self.system_prompt['content'] = line.split('**System Prompt:**', 1)[1].strip()
+                elif line.startswith('**Model:**'):
+                    model_str = line.split('**Model:**', 1)[1].strip()
+                    loaded_model_friendly_name = model_str.split(' ')[0]
+
+            if loaded_model_friendly_name:
+                self.switch_model(loaded_model_friendly_name)
+
+            # Process body
             current_role = None
             current_content = []
-            
-            for line in lines:
+
+            def append_message():
+                if current_role and current_content:
+                    content = '\n'.join(current_content).strip()
+                    if content:
+                        msg = {"role": current_role, "content": content}
+                        self.full_conversation_history.append(msg)
+
+            for line in body_lines:
+                line = line.rstrip('\n')
                 if line.startswith('## User'):
-                    if current_role and current_content:
-                        self.conversation_history.append({
-                            "role": current_role,
-                            "content": '\n'.join(current_content).strip()
-                        })
+                    append_message()
                     current_role = "user"
                     current_content = []
                 elif line.startswith('## Assistant'):
-                    if current_role and current_content:
-                        self.conversation_history.append({
-                            "role": current_role,
-                            "content": '\n'.join(current_content).strip()
-                        })
+                    append_message()
                     current_role = "assistant"
                     current_content = []
-                elif current_role and not line.startswith('#') and not line.startswith('**') and not line.startswith('---'):
-                    if line.strip():
-                        current_content.append(line)
-            
-            if current_role and current_content:
-                self.conversation_history.append({
-                    "role": current_role,
-                    "content": '\n'.join(current_content).strip()
-                })
-            
+                elif line.startswith('**System: Switched to model:'):
+                    append_message()
+                    current_role = None
+                    current_content = []
+                    model_name = line.split('**System: Switched to model: ')[1].split('**')[0]
+                    self.full_conversation_history.append({
+                        "type": "event",
+                        "event": "model_switch",
+                        "model_friendly_name": model_name
+                    })
+                elif current_role:
+                    current_content.append(line)
+
+            append_message()
+
+            # After parsing body, rebuild conversation_history from full_conversation_history
+            self.conversation_history = [msg for msg in self.full_conversation_history if 'role' in msg]
+
             return ("success", f"Loaded conversation from: {filepath} ({len(self.conversation_history)} messages)")
         
         except Exception as e:

@@ -6,21 +6,47 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import Completer, Completion
+from rich.live import Live
 from prompt_toolkit.history import InMemoryHistory
 
 # Initialize console for rich output
 console = Console()
 
-def create_dynamic_completer(bot):
-    """Create a completer that includes commands, models, and filenames"""
-    commands = bot.get_command_completions()
-    models = bot.get_model_names()
-    files = bot.get_saved_filenames()
-    
-    # Combine all completions
-    all_completions = commands + models + files
-    return WordCompleter(all_completions, ignore_case=True)
+class CommandCompleter(Completer):
+    def __init__(self, bot):
+        self.bot = bot
+        self.commands = bot.get_command_completions()
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        
+        if not text.startswith('/'):
+            return
+
+        parts = text.split(' ')
+        
+        if ' ' not in text:
+            # Completing the command itself
+            for command in self.commands:
+                if command.startswith(text):
+                    yield Completion(command, start_position=-len(text))
+        
+        elif len(parts) == 2:
+            command = parts[0]
+            arg_text = parts[1]
+            
+            # Update completions dynamically
+            if command == '/switch':
+                options = self.bot.get_model_names()
+            elif command == '/load':
+                options = self.bot.get_saved_filenames()
+            else:
+                options = []
+            
+            for option in options:
+                if option.startswith(arg_text):
+                    yield Completion(option, start_position=-len(arg_text))
 
 def print_help():
     """Display help information"""
@@ -170,13 +196,14 @@ def main_loop():
     
     while True:
         try:
-            # Update completer with latest model and file names
-            completer = create_dynamic_completer(bot)
+            # Use the new context-aware completer
+            completer = CommandCompleter(bot)
             
             # Get user input with auto-completion
             user_input = session.prompt(
                 f"[{bot.active_model_friendly}] You: ",
-                completer=completer
+                completer=completer,
+                complete_while_typing=True
             )
             
             if not user_input.strip():
@@ -230,7 +257,9 @@ def main_loop():
                     else:
                         result = bot.load_conversation(arg)
                         print_message(result[0], result[1])
-                        
+                        if result[0] == 'success':
+                            console.print(f"Current model set to [cyan]{bot.active_model_friendly}[/cyan].")
+
                 elif command == '/list':
                     conversations = bot.list_saved_conversations()
                     if conversations is None:
@@ -246,29 +275,22 @@ def main_loop():
                     print_message("error", f"Unknown command: {command}")
                     console.print("Type /help to see available commands", style="dim")
 
-            # Regular Chat with Streaming
+            # Regular Chat with Streaming Markdown
             else:
-                console.print("\n[dim]Bot:[/dim] ", end='')
-                
+                console.print()
                 response_text = ""
                 
-                # Stream the response
-                for msg_type, content in bot.get_chat_response_stream(user_input):
-                    if msg_type == "content":
-                        console.print(content, end='', style="")
-                        response_text += content
-                    elif msg_type == "error":
-                        console.print(f"\n✗ {content}", style="red")
-                        return
-                
-                console.print()  # New line after response
-                
-                # Render the complete response as markdown
-                if response_text:
-                    console.print("\n" + "─" * 70, style="dim")
-                    md = Markdown(response_text)
-                    console.print(md)
-                    console.print("─" * 70 + "\n", style="dim")
+                with Live(console=console, auto_refresh=False) as live:
+                    live.update(Markdown("**Bot:**"), refresh=True)
+                    # Stream the response
+                    for msg_type, content in bot.get_chat_response_stream(user_input):
+                        if msg_type == "content":
+                            response_text += content
+                            live.update(Markdown(f"**Bot:**\n{response_text}"), refresh=True)
+                        elif msg_type == "error":
+                            console.print(f"\n✗ {content}", style="red")
+                            break
+                console.print()
 
         except KeyboardInterrupt:
             console.print("\n\n⚠ Interrupted by user.", style="yellow")

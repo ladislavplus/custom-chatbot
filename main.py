@@ -1,6 +1,9 @@
 # main.py
 
 from chatbot import Chatbot
+import os
+from dotenv import load_dotenv
+
 
 def print_help():
     print("\n--- Custom Chatbot Commands ---")
@@ -64,5 +67,12 @@ def main_loop():
         except Exception as e:
             print(f"\nAn unexpected error occurred: {e}")
 
+def check_certif():
+    # load_dotenv()
+    load_dotenv(override=True)
+    print("SSL_CERT_FILE = ", os.getenv("SSL_CERT_FILE"))
+
 if __name__ == "__main__":
     main_loop()
+    # check_certif()
+

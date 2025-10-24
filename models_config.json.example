@@ -1,0 +1,25 @@
+{
+  "models": {
+    "gpt-4o": {
+      "litellm_string": "openai/gpt-4o",
+      "provider": "OpenAI",
+      "description": "OpenAI's latest model.",
+      "use_case": "Complex tasks and reasoning",
+      "context_length": 128000
+    },
+    "llama3-8b-groq": {
+      "litellm_string": "groq/llama3-8b-8192",
+      "provider": "Groq",
+      "description": "Llama 3 8B running on Groq.",
+      "use_case": "Fast and efficient general tasks",
+      "context_length": 8192
+    },
+    "ollama-llama3": {
+      "litellm_string": "ollama/llama3",
+      "provider": "Ollama",
+      "description": "Llama 3 running locally via Ollama.",
+      "use_case": "Local testing and development",
+      "context_length": 8192
+    }
+  }
+}

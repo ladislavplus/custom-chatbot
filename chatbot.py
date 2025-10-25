@@ -1,6 +1,7 @@
 import os
 import json
 import litellm
+import logging
 from dotenv import load_dotenv
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ class Chatbot:
         config_file = Path("models_config.json")
         
         if not config_file.exists():
+            # No need to check for LOGGING_ENABLED here, as this is a warning to the user
             print("Warning: models_config.json not found. Using default models.")
             return {
                 "models": {
@@ -45,6 +47,7 @@ class Chatbot:
             with open(config_file, 'r') as f:
                 return json.load(f)
         except Exception as e:
+            # No need to check for LOGGING_ENABLED here, as this is an error message to the user
             print(f"Error loading models_config.json: {e}")
             return {"models": {}}
     
@@ -71,6 +74,7 @@ class Chatbot:
     
     def switch_model(self, identifier: str):
         """Switch to a different AI model by name, number, or fuzzy match"""
+        # The logging for this function is handled in main.py
         # Try direct match first
         if identifier in self.models_config["models"]:
             model_info = self.models_config["models"][identifier]
@@ -140,6 +144,7 @@ class Chatbot:
             "new_prompt": prompt
         })
         self.start_new_chat()
+        # The logging for this function is handled in main.py
         return "System prompt updated. Conversation reset."
 
     def start_new_chat(self):
@@ -147,11 +152,13 @@ class Chatbot:
         self.conversation_history = []
         self.full_conversation_history = []
         self.total_tokens_used = 0
+        # The logging for this function is handled in main.py
         return "New chat session started."
 
     def get_chat_response_stream(self, user_prompt: str):
         """Get streaming response from the AI model"""
         if not self.active_model_name:
+            # The logging for this function is handled in main.py
             yield ("error", "No model is currently active.")
             return
             
@@ -161,6 +168,7 @@ class Chatbot:
             response_text = ""
             
             # Stream the response
+            # The logging for this function is handled in main.py
             response = litellm.completion(
                 model=self.active_model_name,
                 messages=messages,
@@ -184,9 +192,11 @@ class Chatbot:
             self.conversation_history.append(assistant_message)
             self.full_conversation_history.append(user_message)
             self.full_conversation_history.append(assistant_message)
+            # The logging for this function is handled in main.py
             
         except Exception as e:
             error_msg = self._format_error(e)
+            # The logging for this function is handled in main.py
             yield ("error", error_msg)
     
     def _format_error(self, error):
@@ -207,6 +217,7 @@ class Chatbot:
     def save_conversation(self, filename: str = None):
         """Save conversation to a markdown file"""
         if not self.full_conversation_history:
+            # The logging for this function is handled in main.py
             return ("warning", "No conversation to save.")
         
         if not filename:
@@ -236,9 +247,11 @@ class Chatbot:
                         content = msg['content']
                         f.write(f"## {role}\n\n{content}\n\n")
             
+            # The logging for this function is handled in main.py
             return ("success", f"Conversation saved to: {filepath}")
         
         except Exception as e:
+            # The logging for this function is handled in main.py
             return ("error", f"Error saving conversation: {e}")
     
     def load_conversation(self, filename: str):
@@ -249,6 +262,7 @@ class Chatbot:
         filepath = self.conversations_dir / filename
         
         if not filepath.exists():
+            # The logging for this function is handled in main.py
             return ("error", f"File not found: {filepath}")
         
         try:
@@ -322,9 +336,11 @@ class Chatbot:
             # After parsing body, rebuild conversation_history from full_conversation_history
             self.conversation_history = [msg for msg in self.full_conversation_history if 'role' in msg]
 
+            # The logging for this function is handled in main.py
             return ("success", f"Loaded conversation from: {filepath} ({len(self.conversation_history)} messages)")
         
         except Exception as e:
+            # The logging for this function is handled in main.py
             return ("error", f"Error loading conversation: {e}")
     
     def list_saved_conversations(self):
@@ -347,6 +363,7 @@ class Chatbot:
             return conversations
         
         except Exception as e:
+            # The logging for this function is handled in main.py
             return None
     
     def get_stats(self):
@@ -367,7 +384,7 @@ class Chatbot:
         """Get list of available commands for auto-completion"""
         return [
             "/help", "/quit", "/exit", "/models", "/switch", 
-            "/new", "/system", "/save", "/load", "/list", "/stats"
+            "/new", "/system", "/save", "/load", "/list", "/stats", "/logging"
         ]
     
     def get_model_names(self):

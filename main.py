@@ -1,4 +1,8 @@
 import sys
+import logging
+import logging.config
+import argparse
+import litellm
 from chatbot import Chatbot
 from rich.console import Console
 from rich.markdown import Markdown
@@ -12,6 +16,67 @@ from prompt_toolkit.history import InMemoryHistory
 
 # Initialize console for rich output
 console = Console()
+
+# --- Logging Configuration ---
+LOGGING_ENABLED = False
+
+def configure_logging(enabled):
+    global LOGGING_ENABLED
+    LOGGING_ENABLED = enabled
+    if LOGGING_ENABLED:
+        logging.config.dictConfig({
+            'version': 1,
+            'disable_existing_loggers': True,
+            'formatters': {
+                'standard': {
+                    'format': '%(asctime)s - %(levelname)s - %(message)s'
+                },
+            },
+            'handlers': {
+                'file': {
+                    'level': 'INFO',
+                    'class': 'logging.FileHandler',
+                    'filename': 'chatbot.log',
+                    'formatter': 'standard',
+                    'encoding': 'utf-8',
+                },
+            },
+            'loggers': {
+                '': {
+                    'handlers': ['file'],
+                    'level': 'INFO',
+                    'propagate': False
+                },
+                'litellm': {
+                    'handlers': ['file'],
+                    'level': 'CRITICAL',
+                    'propagate': False
+                }
+            }
+        })
+    else:
+        logging.config.dictConfig({
+            'version': 1,
+            'disable_existing_loggers': True,
+            'handlers': {
+                'null': {
+                    'class': 'logging.NullHandler',
+                },
+            },
+            'loggers': {
+                '': {
+                    'handlers': ['null'],
+                    'level': 'CRITICAL',
+                },
+                 'litellm': {
+                    'handlers': ['null'],
+                    'level': 'CRITICAL',
+                    'propagate': False
+                }
+            }
+        })
+
+# --- End Logging Configuration ---
 
 class CommandCompleter(Completer):
     def __init__(self, bot):
@@ -41,6 +106,8 @@ class CommandCompleter(Completer):
                 options = self.bot.get_model_names()
             elif command == '/load':
                 options = self.bot.get_saved_filenames()
+            elif command == '/logging':
+                options = ['ON', 'OFF']
             else:
                 options = []
             
@@ -71,6 +138,9 @@ def print_help():
 - `/load <filename>` - Load a previous conversation
 - `/list` - List all saved conversations
 
+## Logging
+- `/logging <ON/OFF>` - Enable or disable logging
+
 ## Examples
 ```
 /switch gemini      → Fuzzy matches to gemini-pro
@@ -89,6 +159,7 @@ def print_welcome(bot):
         border_style="dim"
     )
     console.print(welcome)
+    if LOGGING_ENABLED: logging.info("Welcome message displayed.")
 
 def print_models(bot):
     """Display available models in a formatted table"""
@@ -110,11 +181,13 @@ def print_models(bot):
         
         console.print(table)
         console.print()
+    if LOGGING_ENABLED: logging.info("Displayed available models.")
 
 def print_conversations(conversations):
     """Display saved conversations in a table"""
     if not conversations:
         console.print("No saved conversations found.", style="dim")
+        if LOGGING_ENABLED: logging.info("No saved conversations found.")
         return
     
     table = Table(title="Saved Conversations", box=box.SIMPLE, show_header=True)
@@ -128,6 +201,7 @@ def print_conversations(conversations):
         table.add_row(conv['name'], f"{size_kb:.1f} KB", modified)
     
     console.print(table)
+    if LOGGING_ENABLED: logging.info("Displayed saved conversations.")
 
 def print_stats(stats):
     """Display conversation statistics"""
@@ -143,6 +217,7 @@ def print_stats(stats):
         table.add_row("Total tokens", str(stats['total_tokens']))
     
     console.print(table)
+    if LOGGING_ENABLED: logging.info("Displayed conversation statistics.")
 
 def print_message(msg_type, content):
     """Print formatted messages based on type"""
@@ -156,20 +231,24 @@ def print_message(msg_type, content):
         console.print(content, style="dim")
     else:
         console.print(content)
+    if LOGGING_ENABLED: logging.info(f"Printed message: type={msg_type}, content='{content}'")
 
 def handle_model_switch(bot, arg):
     """Handle model switching with fuzzy matching and numbered selection"""
     if not arg:
         console.print("⚠ Usage: /switch <model_name_or_number>", style="yellow")
         console.print("Use /models to see available models", style="dim")
+        if LOGGING_ENABLED: logging.warning("Missing argument for /switch command.")
         return
     
     result = bot.switch_model(arg)
     
     if result[0] == "success":
         print_message("success", result[1])
+        if LOGGING_ENABLED: logging.info(f"Switched model to {arg}.")
     elif result[0] == "error":
         print_message("error", result[1])
+        if LOGGING_ENABLED: logging.error(f"Failed to switch model: {result[1]}")
     elif result[0] == "multiple":
         # Multiple matches found
         console.print("\nMultiple models match your query:", style="yellow")
@@ -185,9 +264,11 @@ def handle_model_switch(bot, arg):
                     handle_model_switch(bot, model_name)
         except (ValueError, IndexError):
             print_message("error", "Invalid selection")
+            if LOGGING_ENABLED: logging.error("Invalid model selection.")
 
 def main_loop():
     """Main application loop"""
+    if LOGGING_ENABLED: logging.info("Starting main loop.")
     bot = Chatbot()
     print_welcome(bot)
     
@@ -214,6 +295,7 @@ def main_loop():
                 parts = user_input.split(' ', 1)
                 command = parts[0].lower()
                 arg = parts[1] if len(parts) > 1 else ""
+                if LOGGING_ENABLED: logging.info(f"Received command: {command} with arg: '{arg}'")
 
                 if command in ('/quit', '/exit'):
                     # Auto-save on exit
@@ -222,6 +304,7 @@ def main_loop():
                         result = bot.save_conversation()
                         print_message(result[0], result[1])
                     console.print("\nGoodbye!\n", style="dim")
+                    if LOGGING_ENABLED: logging.info("Exiting application.")
                     break
                     
                 elif command == '/help':
@@ -270,6 +353,16 @@ def main_loop():
                 elif command == '/stats':
                     stats = bot.get_stats()
                     print_stats(stats)
+                
+                elif command == '/logging':
+                    if arg.upper() == 'ON':
+                        configure_logging(True)
+                        print_message("success", "Logging enabled.")
+                    elif arg.upper() == 'OFF':
+                        configure_logging(False)
+                        print_message("success", "Logging disabled.")
+                    else:
+                        print_message("error", "Usage: /logging <ON/OFF>")
                     
                 else:
                     print_message("error", f"Unknown command: {command}")
@@ -277,6 +370,7 @@ def main_loop():
 
             # Regular Chat with Streaming Markdown
             else:
+                if LOGGING_ENABLED: logging.info(f"User input: '{user_input}'")
                 console.print()
                 response_text = ""
                 
@@ -289,8 +383,10 @@ def main_loop():
                             live.update(Markdown(f"**Bot:**\n{response_text}"), refresh=True)
                         elif msg_type == "error":
                             console.print(f"\n✗ {content}", style="red")
+                            if LOGGING_ENABLED: logging.error(f"Error during response streaming: {content}")
                             break
                 console.print()
+                if LOGGING_ENABLED: logging.info(f"Bot response: '{response_text}'")
 
         except KeyboardInterrupt:
             console.print("\n\n⚠ Interrupted by user.", style="yellow")
@@ -299,15 +395,26 @@ def main_loop():
                 result = bot.save_conversation()
                 print_message(result[0], result[1])
             console.print("\nGoodbye!\n", style="dim")
+            if LOGGING_ENABLED: logging.info("Exiting application due to KeyboardInterrupt.")
             break
             
         except EOFError:
             # Handle Ctrl+D
+            if LOGGING_ENABLED: logging.info("Exiting application due to EOFError.")
             break
             
         except Exception as e:
             console.print(f"\n✗ An unexpected error occurred: {e}", style="red")
             console.print("Please try again or type /help for assistance.\n", style="dim")
+            if LOGGING_ENABLED: logging.exception("An unexpected error occurred in the main loop.")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Custom Chatbot')
+    parser.add_argument('--logging', type=str.upper, choices=['ON', 'OFF'], default='OFF', help='Enable or disable logging')
+    args = parser.parse_args()
+
+    configure_logging(args.logging == 'ON')
+
+    if LOGGING_ENABLED: logging.info("Application starting.")
     main_loop()
+    if LOGGING_ENABLED: logging.info("Application finished.")

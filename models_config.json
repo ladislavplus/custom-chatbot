@@ -35,6 +35,13 @@
       "context_length": 32768,
       "use_case": "Fast, efficient responses"
     },
+    "compound": {
+      "litellm_string": "groq/groq/compound",
+      "provider": "Groq",
+      "description": "Groq's compound model",
+      "context_length": 131072,
+      "use_case": "Quick tasks"
+    },
     "compound_mini": {
       "litellm_string": "groq/groq/compound-mini",
       "provider": "Groq",
@@ -55,6 +62,20 @@
       "description": "Ultra-fast Llama model",
       "context_length": 8192,
       "use_case": "Instant responses"
+    },
+    "kimi": {
+      "litellm_string": "groq/moonshotai/kimi-k2-instruct-0905",
+      "provider": "MoonshotAI",
+      "description": "Kimi latest model",
+      "context_length": 262144,
+      "use_case": "Tool use, coding, autonomous problem solving across domains."
+    },
+    "qwen": {
+      "litellm_string": "groq/qwen/qwen3-32b",
+      "provider": "Groq",
+      "description": "Qwen 3 32B is the latest generation of large language models in the Qwen series",
+      "context_length": 131072,
+      "use_case": "Reasoning, instruction-following, agent capabilities, and multilingual support."
     },
     "magmedium1": {
       "litellm_string": "mistral/magistral-medium-2506",

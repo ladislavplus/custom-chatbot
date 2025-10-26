@@ -41,6 +41,10 @@ class CommandCompleter(Completer):
                 options = self.bot.get_model_names()
             elif command == '/load':
                 options = self.bot.get_saved_filenames()
+            elif command == '/set':
+                options = list(self.bot.get_default_llm_params().keys())
+            elif command in ('/system', '/delprompt', '/insert'):
+                options = list(self.bot.get_prompts().keys())
             else:
                 options = []
             
@@ -64,7 +68,18 @@ def print_help():
 
 ## Conversation Management
 - `/new` - Start a new conversation
-- `/system <prompt>` - Set a new system prompt
+- `/system [alias]` - Set system prompt from a saved alias or raw text. Lists aliases if none given.
+
+## Prompt Library
+- `/prompts` - List all saved prompts
+- `/addprompt <alias> <text>` - Save a new prompt
+- `/delprompt <alias>` - Delete a prompt
+- `/insert <alias>` - Insert a saved prompt's text into the input box
+
+## LLM Settings
+- `/settings` - Display current LLM parameter settings
+- `/set <param> <value>` - Set a parameter (e.g., temperature, max_tokens)
+- `/reset` - Reset all parameters to their default values
 
 ## Save/Load
 - `/save [filename]` - Save conversation to markdown
@@ -73,10 +88,10 @@ def print_help():
 
 ## Examples
 ```
-/switch gemini      → Fuzzy matches to gemini-pro
-/switch 3           → Switches to model #3
-/save my_chat       → Saves as my_chat.md
-/load my_chat       → Loads my_chat.md
+/system coder       → Switches to the 'coder' system prompt
+/addprompt idea Generate five startup ideas
+/insert idea        → Puts the saved prompt text into the input box
+/set temperature 0.9
 ```
 """
     console.print(Markdown(help_text))
@@ -111,6 +126,26 @@ def print_models(bot):
         console.print(table)
         console.print()
 
+def print_prompts(bot):
+    """Display saved prompts in a table"""
+    prompts = bot.get_prompts()
+    if not prompts:
+        console.print("No saved prompts found.", style="dim")
+        return
+
+    table = Table(title="Saved Prompts", box=box.SIMPLE, show_header=True, header_style="bold")
+    table.add_column("Alias", style="cyan", max_width=20)
+    table.add_column("Prompt Text", style="dim")
+
+    for alias, text in prompts.items():
+        # Truncate long prompt text for display
+        display_text = text.replace('\n', ' ')
+        if len(display_text) > 100:
+            display_text = display_text[:97] + "..."
+        table.add_row(alias, display_text)
+    
+    console.print(table)
+
 def print_conversations(conversations):
     """Display saved conversations in a table"""
     if not conversations:
@@ -142,6 +177,30 @@ def print_stats(stats):
     if stats['total_tokens'] > 0:
         table.add_row("Total tokens", str(stats['total_tokens']))
     
+    console.print(table)
+
+def print_settings(bot):
+    """Display LLM parameters in a table"""
+    settings = bot.get_llm_params()
+    defaults = bot.get_default_llm_params()
+    
+    table = Table(title="LLM Settings", box=box.ROUNDED, show_header=True, header_style="bold")
+    table.add_column("Parameter", style="cyan")
+    table.add_column("Current Value", style="bold")
+    table.add_column("Default Value", style="dim")
+    
+    for param, default_value in defaults.items():
+        current_value = settings.get(param)
+        
+        # Format values for display
+        current_str = str(current_value) if current_value is not None else "None"
+        default_str = str(default_value) if default_value is not None else "None"
+
+        if current_str != default_str:
+            table.add_row(param, f"[yellow]{current_str}[/yellow]", default_str)
+        else:
+            table.add_row(param, current_str, default_str)
+            
     console.print(table)
 
 def print_message(msg_type, content):
@@ -193,6 +252,7 @@ def main_loop():
     
     # Create prompt session with history and auto-completion
     session = PromptSession(history=InMemoryHistory())
+    insert_text_for_next_prompt = ""
     
     while True:
         try:
@@ -203,8 +263,10 @@ def main_loop():
             user_input = session.prompt(
                 f"[{bot.active_model_friendly}] You: ",
                 completer=completer,
-                complete_while_typing=True
+                complete_while_typing=True,
+                default=insert_text_for_next_prompt
             )
+            insert_text_for_next_prompt = "" # Reset after use
             
             if not user_input.strip():
                 continue
@@ -213,7 +275,7 @@ def main_loop():
             if user_input.startswith('/'):
                 parts = user_input.split(' ', 1)
                 command = parts[0].lower()
-                arg = parts[1] if len(parts) > 1 else ""
+                arg = parts[1].strip() if len(parts) > 1 else ""
 
                 if command in ('/quit', '/exit'):
                     # Auto-save on exit
@@ -239,8 +301,9 @@ def main_loop():
                         
                 elif command == '/system':
                     if not arg:
-                        console.print("⚠ Usage: /system <new_prompt>", style="yellow")
-                        console.print("Example: /system You are a helpful coding assistant", style="dim")
+                        # If no arg, list available prompts
+                        print_prompts(bot)
+                        print_message("info", "Usage: /system <alias> or /system <full prompt text>")
                     else:
                         result = bot.set_system_prompt(arg)
                         print_message("success", result)
@@ -270,6 +333,53 @@ def main_loop():
                 elif command == '/stats':
                     stats = bot.get_stats()
                     print_stats(stats)
+
+                elif command == '/settings':
+                    print_settings(bot)
+
+                elif command == '/reset':
+                    result = bot.reset_llm_params()
+                    print_message(result[0], result[1])
+
+                elif command == '/set':
+                    parts = arg.split(' ', 1)
+                    if len(parts) < 2 or not arg.strip():
+                        print_message("warning", "Usage: /set <parameter> <value>")
+                        print_message("info", "Example: /set temperature 0.8")
+                    else:
+                        param_name, value_str = parts
+                        result = bot.set_llm_param(param_name, value_str)
+                        print_message(result[0], result[1])
+
+                elif command == '/prompts':
+                    print_prompts(bot)
+
+                elif command == '/addprompt':
+                    parts = arg.split(' ', 1)
+                    if len(parts) < 2 or not arg.strip():
+                        print_message("warning", "Usage: /addprompt <alias> <prompt text>")
+                    else:
+                        alias, text = parts
+                        result = bot.add_prompt(alias, text)
+                        print_message(result[0], result[1])
+
+                elif command == '/delprompt':
+                    if not arg:
+                        print_message("warning", "Usage: /delprompt <alias>")
+                    else:
+                        result = bot.remove_prompt(arg)
+                        print_message(result[0], result[1])
+
+                elif command == '/insert':
+                    if not arg:
+                        print_message("warning", "Usage: /insert <alias>")
+                    else:
+                        text = bot.get_prompt_text(arg)
+                        if text:
+                            insert_text_for_next_prompt = text
+                        else:
+                            print_message("error", f"Alias '{arg}' not found.")
+                    continue
                     
                 else:
                     print_message("error", f"Unknown command: {command}")

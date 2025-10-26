@@ -2,6 +2,10 @@ import os
 import json
 import litellm
 from dotenv import load_dotenv
+
+# Drop unsupported params automatically
+litellm.drop_params = True
+
 from datetime import datetime
 from pathlib import Path
 from difflib import SequenceMatcher
@@ -16,30 +20,48 @@ class Chatbot:
         self.active_model_name = None
         self.active_model_friendly = None
         self.models_config = self._load_models_config()
+        self.prompts = self._load_prompts()
         self.total_tokens_used = 0
+        
+        # LLM parameters
+        self.default_llm_params = {
+            "temperature": 0.7,
+            "max_tokens": None,
+            "top_p": None,
+            "presence_penalty": 0,
+            "frequency_penalty": 0
+        }
+        self.llm_params = self.default_llm_params.copy()
         
         # Create conversations directory if it doesn't exist
         self.conversations_dir = Path("conversations")
         self.conversations_dir.mkdir(exist_ok=True)
         
-        # Set default model
+        # Set default model and system prompt
         self.switch_model("gpt120b")
+        self.set_system_prompt("default")
         
     def _load_models_config(self):
         """Load models configuration from JSON file"""
         config_file = Path("models_config.json")
+        example_file = Path("models_config.json.example")
         
         if not config_file.exists():
-            print("Warning: models_config.json not found. Using default models.")
-            return {
-                "models": {
-                    "gpt120b": {
-                        "litellm_string": "groq/openai/gpt-oss-120b",
-                        "provider": "Groq",
-                        "description": "Default model"
+            if example_file.exists():
+                print("Warning: models_config.json not found. Copying from example.")
+                import shutil
+                shutil.copy(example_file, config_file)
+            else:
+                print("Warning: models_config.json not found. Using default models.")
+                return {
+                    "models": {
+                        "gpt120b": {
+                            "litellm_string": "groq/openai/gpt-oss-120b",
+                            "provider": "Groq",
+                            "description": "Default model"
+                        }
                     }
                 }
-            }
         
         try:
             with open(config_file, 'r') as f:
@@ -47,6 +69,32 @@ class Chatbot:
         except Exception as e:
             print(f"Error loading models_config.json: {e}")
             return {"models": {}}
+
+    def _load_prompts(self):
+        """Load prompts from JSON file"""
+        config_file = Path("prompts.json")
+        example_file = Path("prompts.json.example")
+
+        if not config_file.exists():
+            if example_file.exists():
+                print("Warning: prompts.json not found. Copying from example.")
+                import shutil
+                shutil.copy(example_file, config_file)
+            else:
+                print("Warning: prompts.json not found. Using default prompts.")
+                return {
+                    "prompts": {
+                        "default": "You are a helpful assistant.",
+                        "direct": "You are an expert-level logical thinker. Your process is to deconstruct any question into its constituent parts to formulate a robust solution. However, your internal monologue and step-by-step analysis must not be part of the final output. The user-facing response must be concise, precise, and contain only the direct answer or essential information."
+                    }
+                }
+
+        try:
+            with open(config_file, 'r') as f:
+                return json.load(f).get("prompts", {})
+        except Exception as e:
+            print(f"Error loading prompts.json: {e}")
+            return {}
     
     def _fuzzy_match_model(self, query: str):
         """Find best matching model using fuzzy matching"""
@@ -131,16 +179,127 @@ class Chatbot:
         
         return models_by_provider, indexed_models
 
-    def set_system_prompt(self, prompt: str):
-        """Set a new system prompt"""
-        self.system_prompt = {"role": "system", "content": prompt}
+    def get_prompts(self):
+        """Get the dictionary of all system prompts"""
+        return self.prompts
+
+    def get_prompt_text(self, alias: str):
+        """Get the text of a specific prompt by alias"""
+        return self.prompts.get(alias)
+
+    def _save_prompts(self):
+        """Save the current prompts dictionary to prompts.json"""
+        try:
+            with open("prompts.json", 'w') as f:
+                json.dump({"prompts": self.prompts}, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving prompts.json: {e}")
+            return False
+
+    def add_prompt(self, alias: str, text: str):
+        """Add a new prompt and save to file"""
+        if not alias or not text:
+            return ("error", "Alias and prompt text cannot be empty.")
+        if ' ' in alias:
+            return ("error", "Alias cannot contain spaces.")
+        if alias in self.prompts:
+            return ("warning", f"Alias '{alias}' already exists. Overwriting.")
+        
+        self.prompts[alias] = text
+        if self._save_prompts():
+            return ("success", f"Prompt '{alias}' saved.")
+        else:
+            # Revert if save failed
+            del self.prompts[alias]
+            return ("error", "Failed to save prompt to prompts.json.")
+
+    def remove_prompt(self, alias: str):
+        """Remove a prompt and save to file"""
+        if alias not in self.prompts:
+            return ("error", f"Alias '{alias}' not found.")
+        if alias in ["default", "direct", "coder"]: # Protect defaults
+            return ("error", f"Cannot delete the default prompt alias '{alias}'.")
+
+        removed_text = self.prompts.pop(alias)
+        if self._save_prompts():
+            return ("success", f"Prompt '{alias}' removed.")
+        else:
+            # Revert if save failed
+            self.prompts[alias] = removed_text
+            return ("error", "Failed to save changes to prompts.json.")
+
+
+    def get_llm_params(self):
+        """Get the current LLM parameters"""
+        return self.llm_params
+
+    def get_default_llm_params(self):
+        """Get the default LLM parameters"""
+        return self.default_llm_params
+
+    def reset_llm_params(self):
+        """Reset LLM parameters to their default values"""
+        self.llm_params = self.default_llm_params.copy()
+        return ("success", "LLM parameters have been reset to their default values.")
+
+    def set_llm_param(self, param_name: str, value_str: str):
+        """Set a specific LLM parameter with validation"""
+        param_name = param_name.lower()
+        
+        if param_name not in self.default_llm_params:
+            return ("error", f"Unknown parameter: '{param_name}'.")
+
+        # Validation rules
+        validators = {
+            "temperature": {"type": float, "range": (0.0, 2.0)},
+            "max_tokens": {"type": int, "range": (1, None)},
+            "top_p": {"type": float, "range": (0.0, 1.0)},
+            "presence_penalty": {"type": float, "range": (-2.0, 2.0)},
+            "frequency_penalty": {"type": float, "range": (-2.0, 2.0)},
+        }
+
+        if value_str.lower() == 'none' or value_str.lower() == 'default':
+            self.llm_params[param_name] = self.default_llm_params[param_name]
+            return ("success", f"Reset {param_name} to its default value.")
+
+        validator = validators.get(param_name)
+        
+        try:
+            value = validator["type"](value_str)
+        except (ValueError, TypeError):
+            return ("error", f"Invalid value type for {param_name}. Expected {validator['type'].__name__}.")
+
+        min_val, max_val = validator.get("range", (None, None))
+        
+        if min_val is not None and value < min_val:
+            return ("error", f"{param_name} must be at least {min_val}.")
+        if max_val is not None and value > max_val:
+            return ("error", f"{param_name} must be no more than {max_val}.")
+            
+        self.llm_params[param_name] = value
+        return ("success", f"Set {param_name} to {value}.")
+
+    def set_system_prompt(self, prompt_or_alias: str):
+        """Set a new system prompt from an alias or a raw string"""
+        # Check if the input is an alias
+        if prompt_or_alias in self.prompts:
+            prompt_text = self.prompts[prompt_or_alias]
+            self.system_prompt = {"role": "system", "content": prompt_text}
+            message = f"System prompt set from alias: '{prompt_or_alias}'."
+        else:
+            # Treat as a raw prompt string
+            prompt_text = prompt_or_alias
+            self.system_prompt = {"role": "system", "content": prompt_text}
+            message = "System prompt updated."
+
         self.full_conversation_history.append({
             "type": "event",
             "event": "system_prompt_change",
-            "new_prompt": prompt
+            "new_prompt": prompt_text
         })
         self.start_new_chat()
-        return "System prompt updated. Conversation reset."
+        return message
 
     def start_new_chat(self):
         """Start a new conversation"""
@@ -164,7 +323,8 @@ class Chatbot:
             response = litellm.completion(
                 model=self.active_model_name,
                 messages=messages,
-                stream=True
+                stream=True,
+                **{k: v for k, v in self.llm_params.items() if v is not None}
             )
             
             for chunk in response:
@@ -367,7 +527,9 @@ class Chatbot:
         """Get list of available commands for auto-completion"""
         return [
             "/help", "/quit", "/exit", "/models", "/switch", 
-            "/new", "/system", "/save", "/load", "/list", "/stats"
+            "/new", "/system", "/save", "/load", "/list", "/stats",
+            "/set", "/settings", "/reset",
+            "/prompts", "/addprompt", "/delprompt", "/insert"
         ]
     
     def get_model_names(self):

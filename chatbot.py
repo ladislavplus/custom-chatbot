@@ -22,6 +22,7 @@ class Chatbot:
         self.models_config = self._load_models_config()
         self.prompts = self._load_prompts()
         self.total_tokens_used = 0
+        self.model_token_usage = {}
         
         # LLM parameters
         self.default_llm_params = {
@@ -124,6 +125,8 @@ class Chatbot:
             model_info = self.models_config["models"][identifier]
             self.active_model_name = model_info["litellm_string"]
             self.active_model_friendly = identifier
+            if self.active_model_friendly not in self.model_token_usage:
+                self.model_token_usage[self.active_model_friendly] = 0
             self.full_conversation_history.append({
                 "type": "event",
                 "event": "model_switch",
@@ -306,6 +309,7 @@ class Chatbot:
         self.conversation_history = []
         self.full_conversation_history = []
         self.total_tokens_used = 0
+        self.model_token_usage = {}
         return "New chat session started."
 
     def get_chat_response_stream(self, user_prompt: str):
@@ -327,15 +331,21 @@ class Chatbot:
                 **{k: v for k, v in self.llm_params.items() if v is not None}
             )
             
+            chunks = []
             for chunk in response:
+                chunks.append(chunk)
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     response_text += content
                     yield ("content", content)
             
-            # Update token usage if available
-            if hasattr(chunk, 'usage') and chunk.usage:
-                self.total_tokens_used += chunk.usage.total_tokens
+            # Get usage from the collected chunks
+            completion_response = litellm.stream_chunk_builder(chunks)
+            if completion_response and hasattr(completion_response, 'usage') and completion_response.usage:
+                tokens_used = completion_response.usage.total_tokens
+                self.total_tokens_used += tokens_used
+                # Track usage per model
+                self.model_token_usage[self.active_model_friendly] = self.model_token_usage.get(self.active_model_friendly, 0) + tokens_used
             
             # Add to conversation history
             user_message = {"role": "user", "content": user_prompt}
@@ -520,7 +530,8 @@ class Chatbot:
             "total_messages": msg_count,
             "user_messages": user_msgs,
             "assistant_messages": assistant_msgs,
-            "total_tokens": self.total_tokens_used
+            "total_tokens": self.total_tokens_used,
+            "model_token_usage": self.model_token_usage
         }
     
     def get_command_completions(self):

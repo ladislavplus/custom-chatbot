@@ -67,7 +67,7 @@ def print_help():
 - `/stats` - Show conversation statistics
 
 ## Conversation Management
-- `/new` - Start a new conversation
+- `/new` - Start a new conversation (current session is discarded)
 - `/system [alias]` - Set system prompt from a saved alias or raw text. Lists aliases if none given.
 
 ## Prompt Library
@@ -166,18 +166,29 @@ def print_conversations(conversations):
 
 def print_stats(stats):
     """Display conversation statistics"""
-    table = Table(title="Conversation Statistics", box=box.ROUNDED, show_header=False)
+    # Overall stats
+    table = Table(title="Overall Statistics", box=box.ROUNDED, show_header=False)
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="bold")
-    
-    table.add_row("Model", stats['model'])
+    table.add_row("Current model", stats['model'])
     table.add_row("Total messages", str(stats['total_messages']))
-    table.add_row("User messages", str(stats['user_messages']))
-    table.add_row("Assistant messages", str(stats['assistant_messages']))
-    if stats['total_tokens'] > 0:
-        table.add_row("Total tokens", str(stats['total_tokens']))
-    
+    table.add_row("Total tokens", str(stats['total_tokens']))
     console.print(table)
+
+    # Per-model stats
+    if stats['model_token_usage']:
+        console.print("\n[bold]Token Usage by Model[/bold]")
+        for model, tokens in sorted(stats['model_token_usage'].items(), key=lambda item: item[1], reverse=True):
+            model_table = Table(title=f"Model: [cyan]{model}[/cyan]", box=box.MINIMAL, show_header=False)
+            model_table.add_column("Metric", style="dim")
+            model_table.add_column("Value", style="bold")
+            model_table.add_row("Tokens Used", str(tokens))
+            console.print(model_table)
+
+        # Suggestion if multiple models were used
+        if len(stats['model_token_usage']) > 1:
+            suggestion = "[bold]Tip:[/] You\'ve used multiple models. Review the token usage to choose the most cost-effective model for your needs."
+            console.print(Panel(suggestion, border_style="dim"))
 
 def print_settings(bot):
     """Display LLM parameters in a table"""
@@ -259,9 +270,17 @@ def main_loop():
             # Use the new context-aware completer
             completer = CommandCompleter(bot)
             
+            # Get the token count for the current model
+            current_model_tokens = bot.model_token_usage.get(bot.active_model_friendly, 0)
+
+            prompt_str = f"[{bot.active_model_friendly}"
+            if current_model_tokens > 0:
+                prompt_str += f"/{current_model_tokens}t"
+            prompt_str += "]"
+
             # Get user input with auto-completion
             user_input = session.prompt(
-                f"[{bot.active_model_friendly}] You: ",
+                f"{prompt_str} You: ",
                 completer=completer,
                 complete_while_typing=True,
                 default=insert_text_for_next_prompt
@@ -301,7 +320,8 @@ def main_loop():
                         
                 elif command == '/system':
                     if not arg:
-                        # If no arg, list available prompts
+                        # If no arg, list available prompts and show current
+                        console.print(Panel(bot.system_prompt['content'], title="[bold]Current System Prompt[/bold]", border_style="dim"))
                         print_prompts(bot)
                         print_message("info", "Usage: /system <alias> or /system <full prompt text>")
                     else:

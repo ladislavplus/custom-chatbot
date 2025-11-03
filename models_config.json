@@ -60,8 +60,22 @@
       "litellm_string": "groq/llama-3.1-8b-instant",
       "provider": "Groq",
       "description": "Ultra-fast Llama model",
-      "context_length": 8192,
+      "context_length": 131072,
       "use_case": "Instant responses"
+    },
+    "llama4maverick": {
+      "litellm_string": "groq/meta-llama/llama-4-maverick-17b-128e-instruct",
+      "provider": "meta-llama",
+      "description": "17B-parameter multilingual instruction model with 128K context and image understanding",
+      "context_length": 131072,
+      "use_case": "Ideal for chatbots, document Q&A, and multimodal analysis"
+    },
+    "llama4scout": {
+      "litellm_string": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+      "provider": "meta-llama",
+      "description": "17-billion-parameter multimodal instruction model (16-expert Mixture-of-Experts) for text + image input",
+      "context_length": 131072,
+      "use_case": "Ideal for visual-aware chatbots, code generation, and long-document analysis"
     },
     "kimi": {
       "litellm_string": "groq/moonshotai/kimi-k2-instruct-0905",
@@ -72,8 +86,8 @@
     },
     "qwen": {
       "litellm_string": "groq/qwen/qwen3-32b",
-      "provider": "Groq",
-      "description": "Qwen 3 32B is the latest generation of large language models in the Qwen series",
+      "provider": "Qwen",
+      "description": "Qwen 3-32B is part of Alibaba Cloud’s latest generation of LLMs in the Qwen series.",
       "context_length": 131072,
       "use_case": "Reasoning, instruction-following, agent capabilities, and multilingual support."
     },
